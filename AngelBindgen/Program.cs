@@ -37,13 +37,14 @@ internal static class Program
         var compilation = CppParser.Parse(headerContent, parseOption);
 
         var outputFilepath = Utils.CombineAndGetFullPath(targetDir, "../raylib-as/GeneratedBindings");
-        TypeGenerator.Generate(compilation, new GeneratorConfig(
-            OutputDir: outputFilepath,
-            ProjectNamespace: "raylib_as",
-            TypeMappings: new Dictionary<string, string>()
+        TypeGenerator.Generate(compilation, new GeneratorConfig
+        {
+            OutputDir = outputFilepath,
+            ProjectNamespace = "raylib_as",
+            CppTypeToScriptType = new Dictionary<string, string>()
             {
                 ["void*"] = "RawPtr@",
             }
-        ));
+        });
     }
 }

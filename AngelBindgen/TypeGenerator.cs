@@ -3,24 +3,30 @@ using CppAst;
 
 namespace AngelBindgen;
 
-public record GeneratorConfig(
-    string OutputDir,
-    string ProjectNamespace,
-    // TODO: TypeMappings に空白が入っていた場合の対応
-    Dictionary<string, string> TypeMappings);
+public class GeneratorConfig
+{
+    public required string OutputDir { get; init; }
+
+    public required string ProjectNamespace { get; init; }
+
+    public List<string> PredefinedCppTypes { get; init; } = new();
+
+    public Dictionary<string, string> CppTypeToScriptType { get; init; } = new();
+}
 
 public static class TypeGenerator
 {
-    private static readonly IReadOnlyList<string> PredefinedCandidates = new List<string>()
+    private class TypeRegisterInfo
     {
-        "string",
-    };
+    }
 
     private class GeneratorContext
     {
         public required GeneratorConfig Config { get; init; }
 
         public FileReporter Reporter { get; } = new();
+
+        public Dictionary<string, TypeRegisterInfo> RegisteredScriptTypes { get; } = new();
     }
 
     public class FileReporter
@@ -70,6 +76,18 @@ public static class TypeGenerator
         // }
 
         GeneratorContext ctx = new GeneratorContext { Config = generatorConfig };
+
+        foreach (var type in generatorConfig.PredefinedCppTypes)
+        {
+            ctx.RegisteredScriptTypes[type] = new TypeRegisterInfo();
+        }
+
+        foreach (var class_ in targetScope.Classes)
+        {
+            string className = class_.Name;
+            ctx.RegisteredScriptTypes[className] = new TypeRegisterInfo();
+        }
+
         foreach (var class_ in targetScope.Classes)
         {
             generateClass(ctx, class_);
@@ -122,7 +140,7 @@ public static class TypeGenerator
             return getScriptTypeSignature(ctx, typedef.ElementType); // FIXME
         case CppTypeKind.StructOrClass:
             var class_ = (CppClass)type;
-            if (PredefinedCandidates.Contains(class_.Name))
+            if (ctx.RegisteredScriptTypes.ContainsKey(class_.Name))
             {
                 return class_.Name;
             }
@@ -146,7 +164,7 @@ public static class TypeGenerator
 
         // TypeMappings からのマッピングを試みる
         var typeFullName = type.FullName;
-        if (ctx.Config.TypeMappings.TryGetValue(typeFullName.Replace(" ", ""), out var mappedType))
+        if (ctx.Config.CppTypeToScriptType.TryGetValue(typeFullName.Replace(" ", ""), out var mappedType))
         {
             return mappedType;
         }

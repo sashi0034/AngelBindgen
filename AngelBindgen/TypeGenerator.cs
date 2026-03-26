@@ -3,7 +3,7 @@ using CppAst;
 
 namespace AngelBindgen;
 
-public record GenerateConfig(
+public record GeneratorConfig(
     string OutputDir,
     string ProjectNamespace);
 
@@ -14,12 +14,50 @@ public static class TypeGenerator
         "string",
     };
 
-    private static readonly IReadOnlyList<string> GenerateCandidates = new List<string>()
+    private class GeneratorContext
     {
-        "Color"
-    };
+        public required GeneratorConfig Config { get; init; }
 
-    public static void Generate(CppCompilation ast, GenerateConfig generateConfig)
+        public FileReporter Reporter { get; } = new();
+    }
+
+    public class FileReporter
+    {
+        private bool _hasError = false;
+
+        public bool HasError => _hasError;
+
+        public void Begin(string filename)
+        {
+            _hasError = false;
+
+            Console.Write($"=== {filename} ===");
+        }
+
+        public void ReportError(string message)
+        {
+            if (!_hasError)
+            {
+                Console.WriteLine("");
+            }
+
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine(message);
+            Console.ResetColor();
+
+            _hasError = true;
+        }
+
+        public void End()
+        {
+            if (!_hasError)
+            {
+                Console.WriteLine(" OK");
+            }
+        }
+    }
+
+    public static void Generate(CppCompilation ast, GeneratorConfig generatorConfig)
     {
         var targetScope = ast;
         // var targetScope = ast.Namespaces.FirstOrDefault(n => n.Name == "");
@@ -29,22 +67,14 @@ public static class TypeGenerator
         //     return;
         // }
 
-        var sb = new StringBuilder();
+        GeneratorContext ctx = new GeneratorContext { Config = generatorConfig };
         foreach (var class_ in targetScope.Classes)
         {
-            if (GenerateCandidates.Contains(class_.Name))
-            {
-                generateClass(class_, generateConfig);
-            }
+            generateClass(ctx, class_);
         }
-
-        // var outputFile = Path.Combine(rootPath, "BindingGenerator/output.txt");
-        // File.WriteAllText(outputFile, sb.ToString());
-        //
-        // Console.WriteLine(sb.ToString());
     }
 
-    private static string scriptTypeSignature(CppType type)
+    private static string getScriptTypeSignature(GeneratorContext ctx, CppType type)
     {
         switch (type.TypeKind)
         {
@@ -75,7 +105,7 @@ public static class TypeGenerator
         case CppTypeKind.Reference:
             var referenceType = (CppReferenceType)type;
 
-            var typeSignature = scriptTypeSignature(referenceType.ElementType);
+            var typeSignature = getScriptTypeSignature(ctx, referenceType.ElementType);
             if (typeSignature == "") break;
 
             return typeSignature + "&";
@@ -87,10 +117,10 @@ public static class TypeGenerator
             break;
         case CppTypeKind.Typedef:
             var typedef = (CppTypedef)type;
-            return scriptTypeSignature(typedef.ElementType); // FIXME
+            return getScriptTypeSignature(ctx, typedef.ElementType); // FIXME
         case CppTypeKind.StructOrClass:
             var class_ = (CppClass)type;
-            if (GenerateCandidates.Contains(class_.Name) || PredefinedCandidates.Contains(class_.Name))
+            if (PredefinedCandidates.Contains(class_.Name))
             {
                 return class_.Name;
             }
@@ -111,15 +141,17 @@ public static class TypeGenerator
         }
 
         // throw new NotImplementedException("stringifyType not implemented.");
-        Console.WriteLine("Missing type handler: " + type.TypeKind + ": " + type.FullName);
+
+        ctx.Reporter.ReportError($"Missing type handler: [{type.TypeKind}] {type.FullName}");
+
         return "";
     }
 
-    private static string scriptFunctionSignature(CppFunction function)
+    private static string getScriptFunctionSignature(GeneratorContext ctx, CppFunction function)
     {
         string result = "";
 
-        var resultType = scriptTypeSignature(function.ReturnType);
+        var resultType = getScriptTypeSignature(ctx, function.ReturnType);
         if (resultType == "") return "";
         result += resultType;
 
@@ -131,7 +163,7 @@ public static class TypeGenerator
 
             if (index > 0) result += ", ";
 
-            var parameterType = scriptTypeSignature(parameter.Type);
+            var parameterType = getScriptTypeSignature(ctx, parameter.Type);
             if (parameterType == "") return "";
 
             result += parameterType + " " + parameter.Name;
@@ -142,21 +174,25 @@ public static class TypeGenerator
         return result;
     }
 
-    private static void generateClass(CppClass class_, GenerateConfig generateConfig)
+    private static void generateClass(GeneratorContext ctx, CppClass class_)
     {
         string className = class_.Name;
         string includePath = Utils.ExtractRelativePath(class_.SourceFile, "src");
 
-        var binds = new StringBuilder();
+        var outputFilename = className + ".generated.cpp";
+
+        ctx.Reporter.Begin(outputFilename);
+
+        var sb = new StringBuilder();
 
         foreach (var field in class_.Fields)
         {
-            var typeSignature = scriptTypeSignature(field.Type);
+            var typeSignature = getScriptTypeSignature(ctx, field.Type);
             if (typeSignature == "") continue;
 
-            binds.AppendLine(
+            sb.AppendLine(
                 $$"""
-                  bind.property("{{scriptTypeSignature(field.Type)}} {{field.Name}}", &{{className}}::{{field.Name}});
+                  bind.property("{{getScriptTypeSignature(ctx, field.Type)}} {{field.Name}}", &{{className}}::{{field.Name}});
                   """);
         }
 
@@ -164,14 +200,14 @@ public static class TypeGenerator
         {
             if (method.IsStatic) continue;
 
-            string functionSignature = scriptFunctionSignature(method);
+            string functionSignature = getScriptFunctionSignature(ctx, method);
             if (functionSignature == "") continue;
 
             string parameterTypes = method.Parameters.Select(p => p.Type.FullName).Join(", ");
 
             string const_ = method.IsConst ? ", const_" : "";
 
-            binds.AppendLine(
+            sb.AppendLine(
                 $$"""
                   bind.method(
                     "{{functionSignature}}",
@@ -189,7 +225,7 @@ public static class TypeGenerator
               # include <asbind20/asbind.hpp>
               # include <asbind20/operators.hpp>
 
-              namespace {{generateConfig.ProjectNamespace}}
+              namespace {{ctx.Config.ProjectNamespace}}
               {
                   using namespace AngelScript;
 
@@ -200,15 +236,16 @@ public static class TypeGenerator
                       bind.behaviours_by_traits();
                       
                       return [engine, bind]() mutable{
-                          {{binds.ToString().Trim().Replace(Environment.NewLine, Environment.NewLine + "            ")}}
+                          {{sb.ToString().Trim().Replace(Environment.NewLine, Environment.NewLine + "            ")}}
                       };
                   }
               }
               """;
 
-        var outputFilepath = Utils.CombineAndGetFullPath(generateConfig.OutputDir, className + ".generated.cpp");
+        var outputFilepath = Utils.CombineAndGetFullPath(ctx.Config.OutputDir, outputFilename);
+
         File.WriteAllText(Utils.CombineAndGetFullPath(outputFilepath, ""), content);
 
-        Console.WriteLine("Wrote file to " + outputFilepath);
+        ctx.Reporter.End();
     }
 }

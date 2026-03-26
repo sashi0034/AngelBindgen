@@ -11,4 +11,6 @@ public class GeneratorConfig
     public List<string> PredefinedCppTypes { get; init; } = new();
 
     public Dictionary<string, string> CppTypeToScriptType { get; init; } = new();
+
+    public bool ShouldSplitFiles { get; init; } = false; // TODO
 }

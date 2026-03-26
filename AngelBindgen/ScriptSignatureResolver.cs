@@ -79,7 +79,7 @@ internal static class ScriptSignatureResolver
             return mappedType;
         }
 
-        ctx.Logger.LogError($"Missing type handler: [{type.TypeKind}] {typeFullName}");
+        ctx.SectionLogger.LogError($"Missing type handler: [{type.TypeKind}] {typeFullName}");
 
         return "";
     }

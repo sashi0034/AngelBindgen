@@ -39,7 +39,11 @@ internal static class Program
         var outputFilepath = Utils.CombineAndGetFullPath(targetDir, "../raylib-as/GeneratedBindings");
         TypeGenerator.Generate(compilation, new GeneratorConfig(
             OutputDir: outputFilepath,
-            ProjectNamespace: "raylib_as"
+            ProjectNamespace: "raylib_as",
+            TypeMappings: new Dictionary<string, string>()
+            {
+                ["void*"] = "RawPtr@",
+            }
         ));
     }
 }
